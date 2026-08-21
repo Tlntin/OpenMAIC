@@ -23,6 +23,9 @@ export type ImageMapping = Record<string, string>;
 /** Free-form requirements accepted by outline generation. */
 export interface UserRequirements {
   requirement: string;
+  /** Explicit content language selected by the user (for example en-US). */
+  teachingLanguage?: string;
+  generationIntent?: 'course' | 'lesson' | 'summary' | 'assessment';
   userNickname?: string;
   userBio?: string;
   webSearch?: boolean;

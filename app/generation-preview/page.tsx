@@ -56,6 +56,8 @@ import {
 } from './types';
 import { StepVisualizer } from './components/visualizers';
 import { resolveTaskEngineModeFromOutlineDoneEvent } from './vocational-mode';
+import { parseMarkdownOutline } from '@/lib/document/markdown-outline';
+import { buildDefaultChapterPlan } from '@/lib/document/chapter-plan';
 
 const log = createLogger('GenerationPreview');
 const OUTLINE_REVIEW_AUTO_CONTINUE_MS = 2500;
@@ -128,6 +130,11 @@ function GenerationPreviewContent() {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isComplete] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
+  const [previewProgress, setPreviewProgress] = useState<{
+    percent: number;
+    phase: string;
+    current?: string;
+  }>({ percent: 4, phase: 'preparing' });
   const [streamingOutlines, setStreamingOutlines] = useState<SceneOutline[] | null>(null);
   const [isOutlineStreaming, setIsOutlineStreaming] = useState(false);
   const [truncationWarnings, setTruncationWarnings] = useState<string[]>([]);
@@ -345,6 +352,7 @@ function GenerationPreviewContent() {
 
       // Step 0: Extract uploaded course material if needed
       if (hasPdfToAnalyze) {
+        setPreviewProgress({ percent: 8, phase: 'extract' });
         log.debug('=== Generation Preview: Extracting course material bundle ===');
         validateDocumentSources(documentSources, t);
         const sortedDocumentSources = [...documentSources].sort((a, b) => a.order - b.order);
@@ -449,6 +457,11 @@ function GenerationPreviewContent() {
         );
 
         const bundle = buildDocumentBundle(parsedParts);
+        const documentOutline = parseMarkdownOutline(bundle.text);
+        const chapterPlan = buildDefaultChapterPlan(
+          documentOutline,
+          currentSession.chapterConcurrency ?? 1,
+        );
         const imageStorageIds = await storeImages(bundle.images);
 
         const pdfImages: PdfImage[] = bundle.images.map((img, i) => ({
@@ -473,6 +486,8 @@ function GenerationPreviewContent() {
           pdfText: bundle.text,
           pdfImages,
           imageStorageIds,
+          documentOutline,
+          chapterPlan,
           pdfStorageKey: undefined, // Clear so we don't re-parse
         };
         setSession(updatedSession);
@@ -498,6 +513,7 @@ function GenerationPreviewContent() {
         // Reassign local reference for subsequent steps
         currentSession = updatedSession;
         activeSteps = getActiveSteps(currentSession);
+        setPreviewProgress({ percent: 18, phase: 'outline' });
       }
 
       // Step: Web Search (if enabled)
@@ -709,8 +725,10 @@ function GenerationPreviewContent() {
 
         // Mid-stream review intent (sticky ref) overrides the auto-continue timer.
         const userOpenedReviewEarly = outlineReviewIntentRef.current;
-        const shouldReviewOutlines =
-          useSettingsStore.getState().reviewOutlineEnabled || userOpenedReviewEarly;
+        // Unattended generation is the default: outline review is an optional
+        // inspection surface and never blocks the pipeline unless the user
+        // explicitly opened it while streaming.
+        const shouldReviewOutlines = userOpenedReviewEarly;
         const updatedSession: GenerationSessionState = {
           ...currentSession,
           sceneOutlines: outlines,
@@ -751,6 +769,7 @@ function GenerationPreviewContent() {
       if (!outlines || outlines.length === 0) {
         throw new Error(t('generation.outlineEmptyResponse'));
       }
+      setPreviewProgress({ percent: 32, phase: 'outline' });
       stage.taskEngineMode = currentSession.taskEngineMode === true;
 
       // Store languageDirective on the stage
@@ -774,6 +793,7 @@ function GenerationPreviewContent() {
       }> = [];
 
       if (settings.agentMode === 'auto') {
+        setPreviewProgress({ percent: 42, phase: 'agent-generation' });
         const agentStepIdx = activeSteps.findIndex((s) => s.id === 'agent-generation');
         if (agentStepIdx >= 0) setCurrentStepIndex(agentStepIdx);
 
@@ -886,8 +906,17 @@ function GenerationPreviewContent() {
           // Show card-reveal modal, continue generation once all cards are revealed
           setGeneratedAgents(agentData.agents);
           setShowAgentReveal(true);
+          // Generation is unattended by default. Keep the reveal modal as a
+          // non-blocking status view; it may still be opened while generation
+          // continues, but no Continue click is required.
           await new Promise<void>((resolve) => {
             agentRevealResolveRef.current = resolve;
+            window.setTimeout(() => {
+              if (agentRevealResolveRef.current === resolve) {
+                agentRevealResolveRef.current = null;
+                resolve();
+              }
+            }, 700);
           });
 
           agents = savedIds
@@ -971,6 +1000,10 @@ function GenerationPreviewContent() {
       const firstOutline = outlines[0];
 
       // Step 2: Generate content (currentStepIndex is already 2)
+      store.setGenerationStatus('generating');
+      store.setCurrentGeneratingOrder(firstOutline.order);
+      store.setGenerationPhase('content', firstOutline.title);
+      setPreviewProgress({ percent: 58, phase: 'content', current: firstOutline.title });
       const contentData = await fetchSceneContent(
         {
           outline: firstOutline,
@@ -992,6 +1025,8 @@ function GenerationPreviewContent() {
       }
 
       // Generate actions (activate actions step indicator)
+      store.setGenerationPhase('actions', firstOutline.title);
+      setPreviewProgress({ percent: 72, phase: 'actions', current: firstOutline.title });
       const actionsStepIdx = activeSteps.findIndex((s) => s.id === 'actions');
       setCurrentStepIndex(actionsStepIdx >= 0 ? actionsStepIdx : currentStepIndex + 1);
 
@@ -1024,6 +1059,8 @@ function GenerationPreviewContent() {
           settings.ttsProvidersConfig?.[settings.ttsProviderId],
         )
       ) {
+        store.setGenerationPhase('tts', firstOutline.title);
+        setPreviewProgress({ percent: 88, phase: 'tts', current: firstOutline.title });
         const ttsResult = await generateTTSForScene(
           firstScene,
           languageDirective,
@@ -1053,6 +1090,8 @@ function GenerationPreviewContent() {
           agents,
           userProfile,
           languageDirective,
+          chapterPlan: currentSession.chapterPlan,
+          chapterConcurrency: currentSession.chapterConcurrency ?? 1,
         }),
       );
 
@@ -1431,6 +1470,43 @@ function GenerationPreviewContent() {
                           ? t('generation.classroomReady')
                           : statusMessage || t(activeStepText.description)}
                     </p>
+                    {session.chapterPlan && session.chapterPlan.total > 0 && !error && !isComplete && (
+                      <p className="text-xs text-muted-foreground/70">
+                        {t('generation.chapterCount', { count: session.chapterPlan.total })} ·{' '}
+                        {session.chapterPlan.items.some((item) => item.pageStart === undefined)
+                          ? t('generation.pageRangesUnavailable')
+                          : t('generation.pageRangesDetected')}
+                      </p>
+                    )}
+                    {!error && !isComplete && (
+                      <div className="pt-2 space-y-1.5 text-left">
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span>
+                            {previewProgress.phase === 'extract'
+                              ? t('generation.analyzingCourseMaterial')
+                              : previewProgress.phase === 'outline'
+                                ? t('generation.generatingOutlines')
+                                : previewProgress.phase === 'agent-generation'
+                                  ? t('generation.agentGeneration')
+                                  : previewProgress.phase === 'content'
+                                    ? t('generation.generatingSlideContent')
+                                    : previewProgress.phase === 'actions'
+                                      ? t('generation.generatingActions')
+                                      : previewProgress.phase === 'tts'
+                                        ? t('generation.phaseTts')
+                                        : t('generation.phasePreparing')}
+                            {previewProgress.current ? ` · ${previewProgress.current}` : ''}
+                          </span>
+                          <span className="font-medium tabular-nums">{previewProgress.percent}%</span>
+                        </div>
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full bg-primary transition-[width] duration-500"
+                            style={{ width: `${previewProgress.percent}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
                   </motion.div>
                 </AnimatePresence>
 

@@ -74,6 +74,8 @@ export interface UploadedDocument {
  */
 export interface UserRequirements {
   requirement: string; // Single free-form text for all user input
+  teachingLanguage?: string;
+  generationIntent?: 'course' | 'lesson' | 'summary' | 'assessment';
   userNickname?: string; // Student nickname for personalization
   userBio?: string; // Student background for personalization
   webSearch?: boolean; // Enable web search for richer context

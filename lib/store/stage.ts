@@ -199,6 +199,9 @@ function clearedStageState(state: Pick<StageState, 'generationEpoch'>) {
     generationEpoch: state.generationEpoch + 1,
     generationStatus: 'idle' as const,
     currentGeneratingOrder: -1,
+    currentGeneratingPhase: null,
+    currentGeneratingTitle: null,
+    generationStartedAt: null,
     failedOutlines: [],
     generatingOutlines: [],
   };
@@ -289,6 +292,9 @@ interface StageState {
   generationEpoch: number;
   generationStatus: 'idle' | 'generating' | 'paused' | 'completed' | 'error';
   currentGeneratingOrder: number;
+  currentGeneratingPhase: 'content' | 'actions' | 'tts' | 'media' | null;
+  currentGeneratingTitle: string | null;
+  generationStartedAt: number | null;
   failedOutlines: SceneOutline[];
 
   // Actions
@@ -310,6 +316,7 @@ interface StageState {
   markGenerationCompleteIfDone: () => void;
   setGenerationStatus: (status: 'idle' | 'generating' | 'paused' | 'completed' | 'error') => void;
   setCurrentGeneratingOrder: (order: number) => void;
+  setGenerationPhase: (phase: 'content' | 'actions' | 'tts' | 'media' | null, title?: string) => void;
   bumpGenerationEpoch: () => void;
   addFailedOutline: (outline: SceneOutline) => void;
   clearFailedOutlines: () => void;
@@ -425,6 +432,9 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   generationEpoch: 0,
   generationStatus: 'idle' as const,
   currentGeneratingOrder: -1,
+  currentGeneratingPhase: null,
+  currentGeneratingTitle: null,
+  generationStartedAt: null,
   failedOutlines: [],
 
   // Actions
@@ -721,9 +731,18 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     if (isDeckComplete({ outlines, scenes, failedOutlines })) get().setGenerationComplete(true);
   },
 
-  setGenerationStatus: (generationStatus) => set({ generationStatus }),
+  setGenerationStatus: (generationStatus) =>
+    set((state) => ({
+      generationStatus,
+      generationStartedAt:
+        generationStatus === 'generating'
+          ? state.generationStartedAt ?? Date.now()
+          : state.generationStartedAt,
+    })),
 
   setCurrentGeneratingOrder: (currentGeneratingOrder) => set({ currentGeneratingOrder }),
+  setGenerationPhase: (currentGeneratingPhase, currentGeneratingTitle) =>
+    set({ currentGeneratingPhase, currentGeneratingTitle: currentGeneratingTitle ?? null }),
 
   bumpGenerationEpoch: () => set((s) => ({ generationEpoch: s.generationEpoch + 1 })),
 

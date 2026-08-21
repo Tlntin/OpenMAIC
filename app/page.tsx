@@ -99,18 +99,26 @@ interface FormState {
   webSearch: boolean;
   interactiveMode: boolean;
   vocationalTestMode: boolean;
+  teachingLanguage: string;
+  customTeachingLanguage: string;
+  generationIntent: 'course' | 'lesson' | 'summary' | 'assessment';
+  chapterConcurrency: number;
 }
 
 const initialFormState: FormState = {
   courseMaterials: [],
-  requirement: '',
+  requirement: 'Based on the uploaded PDF courseware, please generate a complete and structured teaching curriculum.',
   webSearch: false,
   interactiveMode: false,
   vocationalTestMode: false,
+  teachingLanguage: 'follow-interface',
+  customTeachingLanguage: '',
+  generationIntent: 'course',
+  chapterConcurrency: 1,
 };
 
 function HomePage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { theme, setTheme } = useTheme();
   const router = useRouter();
   const showVocationalTestUi = shouldShowVocationalTestUi();
@@ -501,6 +509,10 @@ function HomePage() {
       setError(t('upload.requirementRequired'));
       return;
     }
+    if (form.courseMaterials.length === 0) {
+      setError(t('upload.courseMaterialRequired'));
+      return;
+    }
 
     setError(null);
 
@@ -508,6 +520,13 @@ function HomePage() {
       const userProfile = useUserProfileStore.getState();
       const requirements: UserRequirements = {
         requirement: form.requirement,
+        teachingLanguage:
+          form.teachingLanguage === 'follow-interface'
+            ? locale
+            : form.teachingLanguage === 'custom'
+              ? form.customTeachingLanguage || locale
+              : form.teachingLanguage,
+        generationIntent: form.generationIntent,
         userNickname: userProfile.nickname || undefined,
         userBio: userProfile.bio || undefined,
         webSearch: form.webSearch || undefined,
@@ -576,6 +595,9 @@ function HomePage() {
         pdfProviderConfig,
         sceneOutlines: null,
         currentStep: 'generating' as const,
+        chapterPlan: undefined,
+        chapterConcurrency: Math.max(1, Math.floor(form.chapterConcurrency || 1)),
+        generationStartedAt: Date.now(),
       };
       sessionStorage.setItem('generationSession', JSON.stringify(sessionState));
 
@@ -598,7 +620,8 @@ function HomePage() {
     return date.toLocaleDateString();
   };
 
-  const canGenerate = !!form.requirement.trim() && hasUsableProvider;
+  const canGenerate =
+    form.courseMaterials.length > 0 && !!form.requirement.trim() && hasUsableProvider;
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -787,6 +810,56 @@ function HomePage() {
               rows={4}
             />
 
+            <div className="flex flex-wrap items-center gap-2 px-4 pb-2 text-xs text-muted-foreground">
+              <label className="flex items-center gap-1.5">
+                <span>{t('generationForm.teachingLanguage')}</span>
+                <select
+                  value={form.teachingLanguage}
+                  onChange={(e) => updateForm('teachingLanguage', e.target.value)}
+                  className="h-7 rounded-md border border-border/60 bg-background px-2 text-xs text-foreground"
+                >
+                  <option value="follow-interface">{t('generationForm.followInterface')}</option>
+                  <option value="zh-CN">简体中文</option>
+                  <option value="en-US">English</option>
+                  <option value="ja-JP">日本語</option>
+                  <option value="ko-KR">한국어</option>
+                  <option value="custom">{t('generationForm.customLanguage')}</option>
+                </select>
+              </label>
+              {form.teachingLanguage === 'custom' && (
+                <input
+                  value={form.customTeachingLanguage}
+                  onChange={(e) => updateForm('customTeachingLanguage', e.target.value)}
+                  placeholder={t('generationForm.customLanguagePlaceholder')}
+                  className="h-7 w-28 rounded-md border border-border/60 bg-background px-2 text-xs text-foreground"
+                />
+              )}
+              <label className="flex items-center gap-1.5">
+                <span>{t('generationForm.intent')}</span>
+                <select
+                  value={form.generationIntent}
+                  onChange={(e) => updateForm('generationIntent', e.target.value as FormState['generationIntent'])}
+                  className="h-7 rounded-md border border-border/60 bg-background px-2 text-xs text-foreground"
+                >
+                  <option value="course">{t('generationForm.course')}</option>
+                  <option value="lesson">{t('generationForm.lesson')}</option>
+                  <option value="summary">{t('generationForm.summary')}</option>
+                  <option value="assessment">{t('generationForm.assessment')}</option>
+                </select>
+              </label>
+              <label className="flex items-center gap-1.5">
+                <span>{t('generationForm.concurrency')}</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={4}
+                  value={form.chapterConcurrency}
+                  onChange={(e) => updateForm('chapterConcurrency', Math.max(1, Math.min(4, Number(e.target.value) || 1)))}
+                  className="h-7 w-14 rounded-md border border-border/60 bg-background px-2 text-xs text-foreground"
+                />
+              </label>
+            </div>
+
             {/* Toolbar row */}
             <div className="px-3 pb-3 flex items-end gap-2">
               <div className="flex-1 min-w-0">
@@ -834,6 +907,7 @@ function HomePage() {
               <button
                 onClick={handleGenerate}
                 disabled={!canGenerate}
+                title={!form.courseMaterials.length ? t('upload.courseMaterialRequired') : undefined}
                 className={cn(
                   'shrink-0 h-8 rounded-lg flex items-center justify-center gap-1.5 transition-all px-3',
                   canGenerate

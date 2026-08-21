@@ -12,6 +12,14 @@ import { useSceneGenerator } from '@/lib/hooks/use-scene-generator';
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
 import { createLogger } from '@/lib/logger';
+import { Loader2 } from 'lucide-react';
+import { useI18n } from '@/lib/hooks/use-i18n';
+import {
+  getHistoricalAveragePageDuration,
+  recordPageGenerationDuration,
+  type GenerationTimingSignature,
+} from '@/lib/generation/generation-timing';
+import { getCurrentModelConfig } from '@/lib/utils/model-config';
 import { MediaStageProvider } from '@/lib/contexts/media-stage-context';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
@@ -26,17 +34,62 @@ const log = createLogger('Classroom');
 export default function ClassroomDetailPage() {
   const params = useParams();
   const classroomId = params?.id as string;
+  const { t } = useI18n();
 
   const { loadFromStorage } = useStageStore();
+  const classroomScenes = useStageStore((s) => s.scenes);
+  const classroomOutlines = useStageStore((s) => s.outlines);
+  const classroomGenerationComplete = useStageStore((s) => s.generationComplete);
+  const classroomGenerationStatus = useStageStore((s) => s.generationStatus);
+  const classroomGenerationPhase = useStageStore((s) => s.currentGeneratingPhase);
+  const classroomGenerationTitle = useStageStore((s) => s.currentGeneratingTitle);
+  const classroomGeneratingOrder = useStageStore((s) => s.currentGeneratingOrder);
+  const classroomGenerationStartedAt = useStageStore((s) => s.generationStartedAt);
+  const timingSignature: GenerationTimingSignature = (() => {
+    const model = getCurrentModelConfig();
+    const settings = useSettingsStore.getState();
+    const ttsConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
+    return {
+      llmModel: model.modelString,
+      ttsProvider: settings.ttsEnabled ? settings.ttsProviderId : 'disabled',
+      ttsModel: settings.ttsEnabled
+        ? ttsConfig?.modelId || settings.ttsModel || 'default'
+        : 'disabled',
+    };
+  })();
+  const [progressNow, setProgressNow] = useState(() => Date.now());
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const generationStartedRef = useRef(false);
+  const generationBaselineScenesRef = useRef<number | null>(null);
+  const generationRunStartedAtRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (classroomGenerationStatus !== 'generating') return;
+    const timer = window.setInterval(() => setProgressNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [classroomGenerationStatus]);
+
+  useEffect(() => {
+    if (classroomGenerationStatus === 'generating') {
+      if (generationBaselineScenesRef.current === null) {
+        generationBaselineScenesRef.current = classroomScenes.length;
+        generationRunStartedAtRef.current = Date.now();
+      }
+    } else {
+      generationBaselineScenesRef.current = null;
+      generationRunStartedAtRef.current = null;
+    }
+  }, [classroomGenerationStatus, classroomScenes.length]);
 
   const { generateRemaining, retrySingleOutline, stop } = useSceneGenerator({
     onComplete: () => {
       log.info('[Classroom] All scenes generated');
+    },
+    onSceneGeneratedWithDuration: (_scene, _order, durationMs) => {
+      recordPageGenerationDuration(durationMs, timingSignature);
     },
   });
 
@@ -167,6 +220,47 @@ export default function ClassroomDetailPage() {
     }
   }, [loading, error, generateRemaining]);
 
+  const pendingSceneCount = classroomOutlines.filter(
+    (outline) => !classroomScenes.some((scene) => scene.order === outline.order),
+  ).length;
+  const isCourseStillGenerating =
+    !loading &&
+    !error &&
+    !classroomGenerationComplete &&
+    pendingSceneCount > 0 &&
+    classroomGenerationStatus === 'generating';
+  const completedSceneCount = classroomOutlines.length - pendingSceneCount;
+  const phaseProgress =
+    classroomGenerationPhase === 'content'
+      ? 0.35
+      : classroomGenerationPhase === 'actions'
+        ? 0.68
+        : classroomGenerationPhase === 'tts'
+          ? 0.9
+          : 0;
+  const generatedPercent = classroomOutlines.length
+    ? Math.min(
+        99,
+        Math.round(((completedSceneCount + phaseProgress) / classroomOutlines.length) * 100),
+      )
+    : 0;
+  const completedDuringRun = Math.max(
+    0,
+    classroomScenes.length - (generationBaselineScenesRef.current ?? classroomScenes.length),
+  );
+  const elapsedMs = generationRunStartedAtRef.current || classroomGenerationStartedAt
+    ? Math.max(
+        0,
+        progressNow - (generationRunStartedAtRef.current || classroomGenerationStartedAt || progressNow),
+      )
+    : 0;
+  const etaMs = completedDuringRun > 0
+    ? Math.max(0, (elapsedMs / completedDuringRun) * pendingSceneCount)
+    : (getHistoricalAveragePageDuration(timingSignature) ?? 0) * pendingSceneCount;
+  const etaUsesHistory = completedDuringRun < 2 && etaMs > 0;
+  const formatDuration = (ms: number) =>
+    `${Math.floor(ms / 60000)}m ${Math.floor(ms / 1000) % 60}s`;
+
   return (
     <ThemeProvider>
       <MediaStageProvider value={classroomId}>
@@ -194,7 +288,56 @@ export default function ClassroomDetailPage() {
               </div>
             </div>
           ) : (
-            <Stage onRetryOutline={retrySingleOutline} />
+            <>
+              <Stage onRetryOutline={retrySingleOutline} />
+              {isCourseStillGenerating && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-sm">
+                  <div className="w-full max-w-xl rounded-xl border bg-card p-6 text-center shadow-xl">
+                    <Loader2 className="mx-auto mb-3 size-8 animate-spin text-primary" />
+                    <h2 className="text-lg font-semibold">{t('generation.courseGeneratingTitle')}</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {classroomGenerationPhase === 'content'
+                        ? t('generation.phaseContent')
+                        : classroomGenerationPhase === 'actions'
+                          ? t('generation.phaseActions')
+                          : classroomGenerationPhase === 'tts'
+                            ? t('generation.phaseTts')
+                            : t('generation.phasePreparing')}
+                      {classroomGenerationTitle ? ` · ${classroomGenerationTitle}` : ''}
+                    </p>
+                    <div className="mt-5 h-2 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full bg-primary transition-[width] duration-500"
+                        style={{ width: `${generatedPercent}%` }}
+                      />
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <span>
+                        {generatedPercent}% · {t('generation.completedPages', {
+                          completed: classroomScenes.length,
+                          total: classroomOutlines.length,
+                        })}
+                        {classroomGeneratingOrder > 0 &&
+                          ` · ${t('generation.currentPage', {
+                            page: classroomGeneratingOrder,
+                            total: classroomOutlines.length,
+                          })}`}
+                      </span>
+                      <span>
+                        {t('generation.elapsedTime', { duration: formatDuration(elapsedMs) })}
+                        {etaMs > 0 &&
+                          ` · ${t(etaUsesHistory ? 'generation.etaHistorical' : 'generation.etaTime', {
+                            duration: formatDuration(etaMs),
+                          })}`}
+                      </span>
+                    </div>
+                    <p className="mt-4 text-xs text-muted-foreground">
+                      {t('generation.autoContinueHint')}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       </MediaStageProvider>

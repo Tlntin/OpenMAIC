@@ -7,6 +7,8 @@ import type {
   ImageMapping,
   SessionDocumentSource,
 } from '@/lib/types/generation';
+import type { MarkdownOutline } from '@/lib/document/markdown-outline';
+import type { ChapterPlan } from '@/lib/document/chapter-plan';
 
 // Session state stored in sessionStorage
 export interface GenerationSessionState {
@@ -40,6 +42,19 @@ export interface GenerationSessionState {
   courseTitle?: string;
   // Server-effective vocational mode from the outline generation done event.
   taskEngineMode?: boolean;
+  documentOutline?: MarkdownOutline;
+  chapterPlan?: ChapterPlan;
+  chapterConcurrency?: number;
+  generationStartedAt?: number;
+  generationProgress?: {
+    completed: number;
+    total: number;
+    phase: 'extract' | 'outline' | 'content' | 'actions' | 'tts' | 'media' | 'complete';
+    currentTitle?: string;
+    currentOrder?: number;
+    elapsedMs?: number;
+    etaMs?: number;
+  };
 }
 
 export type GenerationStep = {

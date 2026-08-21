@@ -23,6 +23,7 @@ import {
   buildOutlinePrompt,
   uniquifyMediaElementIds,
   formatTeacherPersonaForPrompt,
+  formatTeachingLanguageRequirement,
 } from '@openmaic/generation';
 import type { AgentInfo } from '@openmaic/generation';
 import { DEFAULT_LANGUAGE_DIRECTIVE } from '@openmaic/generation';
@@ -382,7 +383,7 @@ export async function POST(req: NextRequest) {
         ? PROMPT_IDS.TASK_ENGINE_OUTLINES
         : PROMPT_IDS.INTERACTIVE_OUTLINES;
       prompts = buildPrompt(promptId, {
-        requirement: requirements.requirement,
+        requirement: formatTeachingLanguageRequirement(requirements),
         pdfContent: pdfText ? pdfText.substring(0, MAX_PDF_CONTENT_CHARS) : 'None',
         availableImages: availableImagesText,
         researchContext: researchContext || 'None',

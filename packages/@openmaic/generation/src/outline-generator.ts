@@ -20,6 +20,13 @@ import { buildPrompt, PROMPT_IDS } from './prompts/index.js';
 export const DEFAULT_LANGUAGE_DIRECTIVE =
   'Teach in the language that matches the user requirement.';
 
+/** Make an explicit UI language selection authoritative for outline generation. */
+export function formatTeachingLanguageRequirement(requirements: UserRequirements): string {
+  const language = requirements.teachingLanguage?.trim();
+  if (!language) return requirements.requirement;
+  return `${requirements.requirement}\n\nMANDATORY CONTENT LANGUAGE: ${language}. Generate the courseTitle, scene titles, descriptions, key points, and languageDirective in ${language}. Translate the source material as needed. Do not use the source document language or the UI language unless it is the selected teaching language.`;
+}
+
 export interface OutlinePromptContext {
   pdfText?: string;
   pdfImages?: PdfImage[];
@@ -97,7 +104,7 @@ export function buildOutlinePrompt(
   const hasSourceImages = (pdfImages?.length ?? 0) > 0;
 
   const prompts = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
-    requirement: requirements.requirement,
+    requirement: formatTeachingLanguageRequirement(requirements),
     pdfContent: pdfText ? pdfText.substring(0, MAX_PDF_CONTENT_CHARS) : 'None',
     availableImages: availableImagesText,
     userProfile: userProfileText,

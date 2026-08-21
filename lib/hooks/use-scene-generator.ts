@@ -506,6 +506,7 @@ export async function generateTTSForScene(
 
 export interface UseSceneGeneratorOptions {
   onSceneGenerated?: (scene: Scene, index: number) => void;
+  onSceneGeneratedWithDuration?: (scene: Scene, index: number, durationMs: number) => void;
   onSceneFailed?: (outline: SceneOutline, error: string) => void;
   onPhaseChange?: (phase: 'content' | 'actions', outline: SceneOutline) => void;
   onComplete?: () => void;
@@ -616,7 +617,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
       // threading and the pause-on-failure UX. With parallelism off this is exactly
       // the original one-at-a-time loop.
       try {
-        const fetchContent = (outline: SceneOutline) =>
+          const fetchContent = (outline: SceneOutline) =>
           fetchSceneContent(
             {
               outline,
@@ -642,6 +643,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
                 parallelConcurrency,
                 async (outline): Promise<SceneContentResult> => {
                   options.onPhaseChange?.('content', outline);
+                  store.getState().setGenerationPhase('content', outline.title);
                   try {
                     return await fetchContent(outline);
                   } catch (err) {
@@ -661,6 +663,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
 
         let pausedByFailureOrAbort = false;
         let hadContentFailure = false;
+        const sceneStartedAt = new Map<string, number>();
         for (const outline of pending) {
           if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
             store.getState().setGenerationStatus('paused');
@@ -669,6 +672,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
           }
 
           store.getState().setCurrentGeneratingOrder(outline.order);
+          sceneStartedAt.set(outline.id, Date.now());
 
           // Step 1: content — await this outline's pre-warmed fetch (parallel),
           // which usually resolved while the previous scene's actions/TTS ran; or
@@ -681,6 +685,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             };
           } else {
             options.onPhaseChange?.('content', outline);
+            store.getState().setGenerationPhase('content', outline.title);
             contentResult = await fetchContent(outline);
           }
 
@@ -712,6 +717,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
 
           // Step 2: Generate actions + assemble scene
           options.onPhaseChange?.('actions', outline);
+          store.getState().setGenerationPhase('actions', outline.title);
           const actionsResult = await fetchSceneActions(
             {
               outline: contentResult.effectiveOutline || outline,
@@ -739,6 +745,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
                 settings.ttsProvidersConfig?.[settings.ttsProviderId],
               )
             ) {
+              store.getState().setGenerationPhase('tts', outline.title);
               const ttsResult = await generateTTSForScene(
                 scene,
                 params.languageDirective || params.stageInfo.language,
@@ -767,6 +774,11 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             removeGeneratingOutline(outline.id);
             addGeneratedScene(scene);
             options.onSceneGenerated?.(scene, outline.order);
+            options.onSceneGeneratedWithDuration?.(
+              scene,
+              outline.order,
+              Date.now() - (sceneStartedAt.get(outline.id) ?? Date.now()),
+            );
             previousSpeeches = actionsResult.previousSpeeches || [];
           } else {
             if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
@@ -788,6 +800,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             store.getState().setGenerationStatus('paused');
           } else {
             store.getState().setGenerationStatus('completed');
+            store.getState().setGenerationPhase(null);
             store.getState().setGeneratingOutlines([]);
             store.getState().setGenerationComplete(true);
             options.onComplete?.();

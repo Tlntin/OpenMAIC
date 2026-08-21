@@ -3,6 +3,15 @@ import { describe, expect, test } from 'vitest';
 import { buildOutlinePrompt } from '@openmaic/generation';
 
 describe('buildOutlinePrompt golden output', () => {
+  test('honors an explicit teaching language override for titles and outlines', () => {
+    const prompt = buildOutlinePrompt({
+      requirement: 'Based on the uploaded PDF, generate a course.',
+      teachingLanguage: 'en-US',
+    });
+    expect(prompt.user).toContain('MANDATORY CONTENT LANGUAGE: en-US');
+    expect(prompt.user).toContain('courseTitle, scene titles');
+  });
+
   test('pins every conditional off', () => {
     expect(
       buildOutlinePrompt(

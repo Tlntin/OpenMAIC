@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   PanelLeftClose,
@@ -42,13 +42,28 @@ export function SceneSidebar({
 }: SceneSidebarProps) {
   const { t } = useI18n();
   const router = useRouter();
-  const { scenes, currentSceneId, setCurrentSceneId, generatingOutlines, generationStatus } =
+  const {
+    scenes,
+    currentSceneId,
+    setCurrentSceneId,
+    generatingOutlines,
+    generationStatus,
+    currentGeneratingPhase,
+    currentGeneratingTitle,
+    generationStartedAt,
+  } =
     useStageStore();
   const failedOutlines = useStageStore.use.failedOutlines();
   const viewportSize = useCanvasStore.use.viewportSize();
   const viewportRatio = useCanvasStore.use.viewportRatio();
 
   const [retryingOutlineId, setRetryingOutlineId] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (generationStatus !== 'generating') return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [generationStatus]);
 
   const handleRetryOutline = async (outlineId: string) => {
     if (!onRetryOutline) return;
@@ -139,6 +154,29 @@ export function SceneSidebar({
             <PanelLeftClose className="w-4 h-4" />
           </button>
         </div>
+
+        {generationStatus === 'generating' && (scenes.length > 0 || generatingOutlines.length > 0) && (
+          <div className="px-3 pb-2 space-y-1.5">
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>{currentGeneratingPhase ? `${currentGeneratingPhase} · ${currentGeneratingTitle || ''}` : 'Generating'}</span>
+              <span>{Math.round((scenes.length / Math.max(1, scenes.length + generatingOutlines.length)) * 100)}%</span>
+            </div>
+            {generationStartedAt && (() => {
+              const completed = scenes.length;
+              const total = Math.max(1, scenes.length + generatingOutlines.length);
+              const elapsed = now - generationStartedAt;
+              const eta = completed > 0 ? Math.max(0, (elapsed / completed) * (total - completed)) : 0;
+              const fmt = (ms: number) => `${Math.floor(ms / 60000)}m ${Math.floor(ms / 1000) % 60}s`;
+              return <div className="text-[9px] text-muted-foreground/70">{fmt(elapsed)} elapsed{eta ? ` · ~${fmt(eta)} left` : ''}</div>;
+            })()}
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-primary transition-all duration-500"
+                style={{ width: `${Math.round((scenes.length / Math.max(1, scenes.length + generatingOutlines.length)) * 100)}%` }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Scenes List */}
         <div
@@ -394,6 +432,18 @@ export function SceneSidebar({
                       </span>
                     </div>
                   </div>
+                  {isActive && !isFailed && currentGeneratingPhase && (
+                    <div className="px-2 text-[10px] text-purple-500 dark:text-purple-300 truncate">
+                      {currentGeneratingPhase === 'content'
+                        ? t('generation.generatingSlideContent')
+                        : currentGeneratingPhase === 'actions'
+                          ? t('generation.generatingActions')
+                          : currentGeneratingPhase === 'tts'
+                            ? 'Generating narration'
+                            : 'Generating media'}
+                      {currentGeneratingTitle ? ` · ${currentGeneratingTitle}` : ''}
+                    </div>
+                  )}
 
                   {/* Skeleton Thumbnail */}
                   <div

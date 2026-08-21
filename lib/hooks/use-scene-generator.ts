@@ -346,15 +346,25 @@ export async function generateAndStoreTTS(
     mediaType: 'audio',
     text,
     voice: settings.ttsVoice,
-    duration,
-    language,
+    ...(duration !== undefined ? { duration } : {}),
+    ...(language ? { language } : {}),
     provider: {
       id: settings.ttsProviderId,
-      model: ttsProviderConfig?.modelId,
+      ...(ttsProviderConfig?.modelId ? { model: ttsProviderConfig.modelId } : {}),
     },
   } as const;
-  const assetId = replaceAssetId ?? (await putAsset(blob, assetMeta));
-  if (replaceAssetId) await replaceAsset(replaceAssetId, blob, assetMeta);
+  let assetId: string;
+  try {
+    assetId = replaceAssetId ?? (await putAsset(blob, assetMeta));
+    if (replaceAssetId) await replaceAsset(replaceAssetId, blob, assetMeta);
+  } catch (error) {
+    throw new Error(
+      `TTS audio storage failed for ${requestId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
+  }
   // Dexie remains a deliberate double-write until Part 3 converges exporters,
   // playback, thumbnails, and import/export onto the shared asset pool.
   try {
@@ -370,7 +380,12 @@ export async function generateAndStoreTTS(
     });
   } catch (error) {
     if (!replaceAssetId) await removeAsset(assetId).catch(() => undefined);
-    throw error;
+    throw new Error(
+      `TTS compatibility storage failed for ${requestId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
   }
   return assetId;
 }

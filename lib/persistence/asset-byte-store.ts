@@ -10,6 +10,18 @@
 import { PgAssetByteStore } from '@openmaic/storage/asset/pg-bytes';
 import type { AssetByteStore, Queryable } from '@openmaic/storage/asset/pg';
 
+type TransactionalAssetByteStore = AssetByteStore & {
+  writeWith(
+    queryable: Queryable,
+    hash: Parameters<PgAssetByteStore['writeWith']>[1],
+    bytes: Uint8Array,
+  ): Promise<void>;
+  readWith(
+    queryable: Queryable,
+    hash: Parameters<PgAssetByteStore['readWith']>[1],
+  ): Promise<Uint8Array | null>;
+};
+
 // Tracing anchors for the standalone build. The store implementations below
 // reach both packages through deliberately untraced dynamic imports (they
 // are optional peers of the storage package), so without a literal reference
@@ -106,7 +118,33 @@ export function lazyAssetByteStore(
   // With no bucket configured the layer is known now, so the method is
   // simply absent. With a bucket, lazy validation is preserved: the wrapper
   // answers `undefined` when the resolved layer turns out not to sign.
-  if (!bucketValue?.trim()) return direct;
+  if (!bucketValue?.trim()) {
+    // PostgreSQL keeps the registry row and bytes in one transaction. Preserve
+    // its transactional byte-store capabilities through the lazy wrapper;
+    // otherwise PgAssetStore falls back to a second pool connection and waits
+    // on the blob row inserted by the outer transaction (a self-inflicted lock).
+    return {
+      ...direct,
+      writeWith: async (
+        tx: Queryable,
+        hash: Parameters<PgAssetByteStore['writeWith']>[1],
+        bytes: Uint8Array,
+      ) => {
+        const store = (await resolve()) as TransactionalAssetByteStore;
+        if (typeof store.writeWith !== 'function') {
+          throw new Error('PostgreSQL asset byte store does not support transactional writes');
+        }
+        await store.writeWith(tx, hash, bytes);
+      },
+      readWith: async (tx: Queryable, hash: Parameters<PgAssetByteStore['readWith']>[1]) => {
+        const store = (await resolve()) as TransactionalAssetByteStore;
+        if (typeof store.readWith !== 'function') {
+          throw new Error('PostgreSQL asset byte store does not support transactional reads');
+        }
+        return store.readWith(tx, hash);
+      },
+    } as AssetByteStore;
+  }
   return {
     ...direct,
     signReadUrl: async (hash, headers) => {

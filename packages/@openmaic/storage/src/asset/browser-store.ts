@@ -213,6 +213,13 @@ export class BrowserAssetStore implements StorageProvider {
         }
       };
       req.onerror = () => reject(req.error);
+      req.onblocked = () =>
+        reject(
+          new Error(
+            `IndexedDB database "${this.dbName}" is blocked by another open connection. ` +
+              'Close other OpenMAIC tabs/windows and retry.',
+          ),
+        );
     }).catch((err) => {
       this.dbPromise = undefined;
       throw err;

@@ -1030,7 +1030,11 @@ function GenerationPreviewContent() {
           signal,
           FOREGROUND_SCENE_RETRY_OPTIONS,
         );
-        if (!ttsResult.success) throw new Error(t('generation.speechFailed'));
+        if (!ttsResult.success) {
+          throw new Error(
+            `${t('generation.speechFailed')}${ttsResult.error ? `: ${ttsResult.error}` : ''}`,
+          );
+        }
       }
 
       // Add scene to store and navigate
